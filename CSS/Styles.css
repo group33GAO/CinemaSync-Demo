@@ -1284,3 +1284,42 @@ body.inventory-page button#btnSync {
     font-size: 0.85rem;
     line-height: 1.6;
 }
+
+/* =============================================================================
+   SECTION - INVENTORY MANAGEMENT - COUNT SESSION CARDS (matches real system)
+   ============================================================================= */
+
+.count-session-card {
+    background-color: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--glass-border);
+    border-right: 4px solid var(--primary-teal);
+    border-radius: 12px;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.count-session-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.btn-outline-teal {
+    background: transparent !important;
+    color: var(--primary-teal) !important;
+    border: 1px solid var(--primary-teal) !important;
+    border-radius: 8px;
+    transition: background 0.2s ease;
+}
+
+.btn-outline-teal:hover:not(:disabled) {
+    background: rgba(0, 206, 209, 0.15) !important;
+}
+
+.btn-outline-teal:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.badge.bg-teal {
+    background-color: var(--primary-teal) !important;
+    color: #050505;
+}

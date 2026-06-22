@@ -391,7 +391,7 @@ function mockShapFactors(movie, day, hour, venueCapacity) {
 
     // Sort by absolute value, take top 8
     factors.sort(function (a, b) {
-        return Math.abs(b.shap_value) - Math.abs(a.shap_value);
+        return Math.abs(b.shapValue) - Math.abs(a.shapValue);
     });
     return factors.slice(0, 8);
 }
@@ -400,3 +400,159 @@ function mockShapFactors(movie, day, hour, venueCapacity) {
    Average base prediction (for SHAP "starting point")
    ============================================================ */
 const MOCK_BASE_TICKETS = 17.5;
+
+/* ============================================================
+   Manpower mock — mirrors the real ManpowerOptimizer.
+   Builds a full branch week schedule (all venues × time slots)
+   to derive daily/weekly guest totals, then applies the same
+   staffing formula the C# server uses.
+   ============================================================ */
+
+const MANPOWER_HOURS = [10, 12, 14, 16, 18, 20, 22];
+
+function mockFormatDate(dateObject) {
+    var year = dateObject.getFullYear();
+    var month = String(dateObject.getMonth() + 1).padStart(2, "0");
+    var day = String(dateObject.getDate()).padStart(2, "0");
+    return year + "-" + month + "-" + day;
+}
+
+// Deterministically pick a movie for a given venue/day/slot.
+function mockPickMovie(venueIndex, dayOffset, hourIndex) {
+    var idx = (venueIndex * 31 + dayOffset * 7 + hourIndex * 13) % DEMO_MOVIES.length;
+    return DEMO_MOVIES[idx];
+}
+
+// Schedule a full week for the branch: every active venue runs a movie in
+// each time slot. Returns per-day { dayIndex, dateIso, guests, screenings }.
+function mockScheduleWeek(weekStartIso) {
+    var weekSunday = new Date(weekStartIso + "T00:00:00");
+    var days = [];
+
+    for (var d = 0; d < 7; d++) {
+        var dayNum = d + 1; // 1=Sunday ... 7=Saturday (Israeli convention)
+        var dayDate = new Date(weekSunday.getTime());
+        dayDate.setDate(dayDate.getDate() + d);
+
+        var guests = 0;
+        var screenings = 0;
+
+        for (var v = 0; v < DEMO_VENUES.length; v++) {
+            var venue = DEMO_VENUES[v];
+            if (!venue.isActive) continue;
+            for (var h = 0; h < MANPOWER_HOURS.length; h++) {
+                var movie = mockPickMovie(v, d, h);
+                var tickets = mockPredictTickets(movie, dayNum, MANPOWER_HOURS[h], venue.capacity);
+                guests += tickets;
+                screenings++;
+            }
+        }
+
+        days.push({
+            dayIndex: d,
+            dateIso: mockFormatDate(dayDate),
+            guests: guests,
+            screenings: screenings
+        });
+    }
+
+    return days;
+}
+
+// Predicted guests for a single date (same approach the real GetDayGuests uses).
+function mockDayGuests(dateIso) {
+    var date = new Date(dateIso + "T00:00:00");
+    var dayIndex = date.getDay();
+    var weekStart = new Date(date.getTime());
+    weekStart.setDate(weekStart.getDate() - dayIndex);
+
+    var days = mockScheduleWeek(mockFormatDate(weekStart));
+    var entry = days[dayIndex];
+    var avg = entry.screenings > 0 ? Math.round(entry.guests / entry.screenings) : 0;
+
+    return {
+        dateIso: dateIso,
+        dailyGuests: entry.guests,
+        screenings: entry.screenings,
+        avgPerScreening: avg
+    };
+}
+
+function mockCeilDiv(a, b) {
+    if (a <= 0) return 0;
+    return Math.ceil(a / b);
+}
+
+// Mirrors ManpowerOptimizer.StaffForDay.
+function mockStaffForDay(dailyGuests) {
+    if (dailyGuests < 0) dailyGuests = 0;
+    var serviceHost = 1;
+    var viewing = 1;
+    var salesReps = mockCeilDiv(dailyGuests, 3000);
+    var ushers = mockCeilDiv(dailyGuests, 2200);
+    if (salesReps < 1) salesReps = 1;
+    if (ushers < 1) ushers = 1;
+
+    return {
+        estimatedGuests: dailyGuests,
+        serviceHost: serviceHost,
+        viewingExperience: viewing,
+        salesReps: salesReps,
+        ushers: ushers,
+        totalStaff: serviceHost + viewing + salesReps + ushers
+    };
+}
+
+// Mirrors ManpowerOptimizer.Calculate + ApplyParameterBumps.
+function mockCalculateManpower(req) {
+    var dailyGuests = req.baseGuests > 0 ? req.baseGuests : 2000;
+    var r = mockStaffForDay(dailyGuests);
+
+    if (req.weather === "rainy") r.ushers += 1;
+    if (req.events === "major") r.salesReps += 1;
+    if (req.isHoliday) { r.salesReps += 1; r.ushers += 1; }
+    if (req.isPremiere) r.serviceHost += 1;
+    if (req.isSchoolVacation) { r.salesReps += 1; r.ushers += 1; }
+    if (req.isHostedEvent) { r.serviceHost += 1; r.ushers += 1; }
+
+    r.totalStaff = r.serviceHost + r.viewingExperience + r.salesReps + r.ushers;
+    r.estimatedGuests = dailyGuests;
+    return r;
+}
+
+// Mirrors ManpowerOptimizer.CalculateForWeek.
+function mockCalculateWeek(weekStartIso) {
+    var days = mockScheduleWeek(weekStartIso);
+    var activeVenues = 0;
+    for (var v = 0; v < DEMO_VENUES.length; v++) {
+        if (DEMO_VENUES[v].isActive) activeVenues++;
+    }
+
+    var result = {
+        days: [],
+        weekTotalGuests: 0,
+        weekTotalStaff: 0,
+        weekTotalScreenings: 0,
+        venueCount: activeVenues
+    };
+
+    for (var d = 0; d < 7; d++) {
+        var staff = mockStaffForDay(days[d].guests);
+        result.days.push({
+            dayIndex: d,
+            dateIso: days[d].dateIso,
+            totalGuests: days[d].guests,
+            screenings: days[d].screenings,
+            serviceHost: staff.serviceHost,
+            viewingExperience: staff.viewingExperience,
+            salesReps: staff.salesReps,
+            ushers: staff.ushers,
+            totalStaff: staff.totalStaff
+        });
+        result.weekTotalGuests += days[d].guests;
+        result.weekTotalStaff += staff.totalStaff;
+        result.weekTotalScreenings += days[d].screenings;
+    }
+
+    return result;
+}
